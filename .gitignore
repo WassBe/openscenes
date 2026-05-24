@@ -1,0 +1,15 @@
+# LLM weights
+*.gguf
+
+# User data
+database/users/*
+database/characters/*
+database/llm/*
+
+# Python
+core/env/
+__pycache__/
+*.pyc
+
+# Misc
+.claude/

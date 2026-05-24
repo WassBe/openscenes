@@ -1,0 +1,19 @@
+OpenScenes uses the following dependencies:
+
+## Backend
+
+- Flask (BSD-3-Clause) — https://palletsprojects.com/p/flask
+- flask-cors (MIT) — https://github.com/corydolphin/flask-cors
+- llama-cpp-python (MIT) — https://github.com/abetlen/llama-cpp-python
+
+## Frontend
+
+- React (MIT) — https://react.dev
+- React Router (MIT) — https://reactrouter.com
+- Vite (MIT) — https://vitejs.dev
+- Axios (MIT) — https://axios-http.com
+- react-markdown (MIT) — https://github.com/remarkjs/react-markdown
+
+## Development
+
+Repetitive and boilerplate tasks assisted by Claude Code (Anthropic).
