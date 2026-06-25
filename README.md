@@ -21,21 +21,24 @@ Local, self-hosted character roleplay chatbot. Dispatches each chat to a backend
 ## Table of contents
 
 - [What it does](#what-it-does)
-- [User manual](#user-manual)
-  - [Requirements](#requirements)
-  - [Setup](#setup)
-  - [First run](#first-run)
-  - [Configuring providers (BYOK)](#configuring-providers-byok)
-  - [Creating a character](#creating-a-character)
-  - [Chatting](#chatting)
-  - [Managing users and personas](#managing-users-and-personas)
-  - [Configuration](#configuration)
+
+**User manual** — install OpenScenes and start chatting, no coding required:
+
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [First run](#first-run)
+- [Configuring providers (BYOK)](#configuring-providers-byok)
+- [Creating a character](#creating-a-character)
+- [Chatting](#chatting)
+- [Managing users and personas](#managing-users-and-personas)
+- [Configuration](#configuration)
+
+**Technical documentation** — architecture, API, and development, for self-hosters and contributors:
+
 - [Project structure](#project-structure)
-  - [Backend — core/](#backend--core)
-  - [Frontend — client/](#frontend--client)
-  - [Database — database/](#database--database)
 - [API reference](#api-reference)
 - [Running in development](#running-in-development)
+- [Contributing](#contributing)
 
 ---
 
@@ -54,7 +57,9 @@ You pick per chat. Credentials are per-user (BYOK) and never leave your server e
 
 ---
 
-## User manual
+# User manual
+
+> Everything a user needs to get OpenScenes running and start chatting. No coding — just two commands and a provider key.
 
 ### Requirements
 
@@ -146,6 +151,10 @@ CLIENT_PORT=5173
 Per CONVENTION.md §Sensitive data, no API keys live here — those are stored per-user inside the gitignored `database/` tree.
 
 ---
+
+# Technical documentation
+
+> How OpenScenes is built, its HTTP API, and how to run it in development. For self-hosters and contributors — skip this if you just want to chat.
 
 ## Project structure
 
