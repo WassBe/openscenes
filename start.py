@@ -1,8 +1,9 @@
-"""Launcher: starts the Flask backend and the built client preview server.
+"""Launcher: starts the Flask backend, which also serves the built client.
 
-Reads ``config.ini`` for addresses and ports, then spawns ``main.py`` in
-``core/`` and ``npm run preview`` in ``client/``. Requires ``setup.py``
-to have been run first.
+Reads ``config.ini`` for the address and port, then spawns ``main.py`` in
+``core/``. The built React client in ``client/dist/`` is served by Flask on
+the same origin — no separate Node process is needed at runtime. Requires
+``setup.py`` to have been run first.
 """
 import configparser
 import os
@@ -16,7 +17,7 @@ CORE_DIR   = os.path.join(SCRIPT_DIR, "core")
 CLIENT_DIR = os.path.join(SCRIPT_DIR, "client")
 VENV_DIR   = os.path.join(CORE_DIR, "env")
 CONFIG     = os.path.join(SCRIPT_DIR, "config.ini")
-DIST_DIR   = os.path.join(CLIENT_DIR, "dist")
+DIST_DIR   = os.path.join(CLIENT_DIR, "dist")  # Built by setup.py; served by Flask at runtime.
 
 if platform.system() == "Windows":
     VENV_PYTHON = os.path.join(VENV_DIR, "Scripts", "python.exe")
@@ -49,21 +50,17 @@ def check_ready():
 
 
 def main():
-    """Start backend and client, then wait until interrupted."""
+    """Start the Flask backend and wait until interrupted."""
     check_ready()
 
     cfg    = read_config()
-    c_addr = cfg.get("CORE_ADDRESS",   "localhost")
-    c_port = cfg.get("CORE_PORT",      "8080")
-    l_addr = cfg.get("CLIENT_ADDRESS", "localhost")
-    l_port = cfg.get("CLIENT_PORT",    "5173")
+    c_addr = cfg.get("CORE_ADDRESS", "localhost")
+    c_port = cfg.get("CORE_PORT",    "8080")
 
-    print(f"Server  : http://{c_addr}:{c_port}")
-    print(f"Client  : http://{l_addr}:{l_port}")
+    print(f"Open    : http://{c_addr}:{c_port}")
     print("Press Ctrl+C to stop.\n")
 
     server = subprocess.Popen([VENV_PYTHON, "main.py"], cwd=CORE_DIR)
-    client = subprocess.Popen("npm run preview", cwd=CLIENT_DIR, shell=True)
 
     try:
         server.wait()
@@ -71,9 +68,7 @@ def main():
         print("\nShutting down...")
     finally:
         server.terminate()
-        client.terminate()
         server.wait()
-        client.wait()
 
 
 if __name__ == "__main__":

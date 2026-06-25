@@ -3,22 +3,19 @@ import axios from 'axios'
 import { useApp } from '../../context/AppContext'
 import Icon from '../../components/Icon'
 
-const PROVIDERS = [
-    { id: 'agent',      label: 'OpenScenes Agent', hint: 'Forward requests to a local-or-remote agent running llama-cpp.' },
-    { id: 'openrouter', label: 'OpenRouter',       hint: 'Forward requests to OpenRouter using your API key.' },
-]
-
-const blank = { id: null, name: '', provider: 'agent' }
-
 /** Settings tab: CRUD for LLM entries. Entries are per-user pure labels of
- * ``{name, provider}``; connection credentials (API keys, agent address)
- * live in the Connections tab. */
+ * ``{name, model, provider}`` — ``name`` is a free display label, ``model`` is
+ * the provider's model identifier; connection credentials (API keys, agent
+ * address) live in the Connections tab. */
 function LlmsTab() {
     const { userId } = useApp()
+    const [providers, setProviders] = useState([])
     const [llms, setLlms] = useState([])
     const [draft, setDraft] = useState(null)
     const [error, setError] = useState('')
     const [busy, setBusy] = useState(false)
+
+    const providerMap = Object.fromEntries(providers.map(p => [p.id, p]))
 
     function refresh() {
         if (userId == null) return Promise.resolve()
@@ -27,9 +24,18 @@ function LlmsTab() {
             .catch(err => setError(err.response?.data?.error || 'Could not load LLMs.'))
     }
 
+    useEffect(() => {
+        axios.get('/api/providers')
+            .then(res => setProviders(res.data))
+            .catch(() => {})
+    }, [])
+
     useEffect(() => { refresh() }, [userId])
 
-    function startNew() { setDraft({ ...blank }); setError('') }
+    function startNew() {
+        setDraft({ id: null, name: '', model: '', provider: 'agent' })
+        setError('')
+    }
 
     function startEdit(llm) {
         if (userId == null) return
@@ -37,6 +43,7 @@ function LlmsTab() {
             .then(response => setDraft({
                 id: response.data.id,
                 name: response.data.name || '',
+                model: response.data.model || '',
                 provider: response.data.provider,
             }))
             .catch(err => setError(err.response?.data?.error || 'Could not load LLM.'))
@@ -48,12 +55,13 @@ function LlmsTab() {
         e.preventDefault()
         if (userId == null) return
         if (!draft.name.trim()) { setError('Name required.'); return }
+        if (!draft.model.trim()) { setError('Model required.'); return }
         const isNew = draft.id == null
         setBusy(true)
 
         const payload = isNew
-            ? { name: draft.name.trim(), provider: draft.provider }
-            : { name: draft.name.trim() }
+            ? { name: draft.name.trim(), model: draft.model.trim(), provider: draft.provider }
+            : { name: draft.name.trim(), model: draft.model.trim() }
 
         const req = isNew
             ? axios.post(`/api/users/${userId}/llms`, payload)
@@ -80,6 +88,13 @@ function LlmsTab() {
 
     if (draft) {
         const isNew = draft.id == null
+        const selectedProvider = providerMap[draft.provider]
+        const modelPlaceholder = draft.provider === 'agent'
+            ? 'e.g. Meta-Llama-3.1-8B-Instruct-Q4_K_M'
+            : 'e.g. anthropic/claude-3.5-sonnet'
+        const modelHint = draft.provider === 'agent'
+            ? 'The model name as registered on the agent.'
+            : `The model identifier for ${selectedProvider?.label || 'the selected provider'}.`
 
         return (
             <form onSubmit={save} className='manage-form'>
@@ -98,22 +113,29 @@ function LlmsTab() {
                         autoFocus
                         value={draft.name}
                         onChange={(e) => setDraft(d => ({ ...d, name: e.target.value }))}
-                        placeholder={draft.provider === 'openrouter'
-                            ? 'e.g. anthropic/claude-3.5-sonnet'
-                            : 'e.g. Meta-Llama-3.1-8B-Instruct-Q4_K_M'}
+                        placeholder='e.g. Claude 3.5 (OpenRouter)'
                     />
                     <span className='field__hint'>
-                        {draft.provider === 'openrouter'
-                            ? 'The OpenRouter model identifier — see openrouter.ai/models.'
-                            : 'The LLM name as registered on the agent.'}
+                        A label to recognize this entry — handy when the same model runs on several providers.
                     </span>
+                </div>
+
+                <div className='field'>
+                    <label className='field__label'>Model</label>
+                    <input
+                        className='input'
+                        value={draft.model}
+                        onChange={(e) => setDraft(d => ({ ...d, model: e.target.value }))}
+                        placeholder={modelPlaceholder}
+                    />
+                    <span className='field__hint'>{modelHint}</span>
                 </div>
 
                 <div className='field'>
                     <label className='field__label'>Provider</label>
                     {isNew ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                            {PROVIDERS.map(p => (
+                            {providers.map(p => (
                                 <label key={p.id} className='row' style={{ gap: 10, cursor: 'pointer' }}>
                                     <input
                                         type='radio'
@@ -127,12 +149,12 @@ function LlmsTab() {
                             ))}
                         </div>
                     ) : (
-                        <input className='input' value={draft.provider} disabled />
+                        <input className='input' value={selectedProvider?.label || draft.provider} disabled />
                     )}
                 </div>
 
                 <div className='field__hint' style={{ marginTop: 8 }}>
-                    Credentials (OpenRouter API key, Agent address &amp; key) live in the <strong>Connections</strong> tab.
+                    Credentials (API keys, Agent address) live in the <strong>Connections</strong> tab.
                 </div>
 
                 <div className='manage-form__actions'>
@@ -161,9 +183,7 @@ function LlmsTab() {
                         <div className='list-item__body'>
                             <span className='list-item__name'>{l.name}</span>
                             <span className='list-item__meta'>
-                                {l.provider === 'agent' ? 'OpenScenes Agent'
-                                    : l.provider === 'openrouter' ? 'OpenRouter'
-                                    : l.provider}
+                                {l.model} · {providerMap[l.provider]?.label || l.provider}
                             </span>
                         </div>
                         <div className='list-item__actions'>

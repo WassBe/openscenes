@@ -3,19 +3,15 @@ import axios from 'axios'
 import { useApp } from '../../context/AppContext'
 import Icon from '../../components/Icon'
 
-const blank = {
-    openrouter: { api_key: '', has_api_key: false, api_key_preview: '' },
-    agent:      { address: '', api_key: '', has_api_key: false, api_key_preview: '' },
-}
-
 /** Settings tab: per-user connections (BYOK).
  *
- * Link your OpenRouter account and your OpenScenes Agent here — these are
- * the platforms LLM dispatch can route through. The server masks API keys
- * on read and accepts partial PUTs; empty inputs use provider-specific
- * semantics (see the hint text below each field). */
+ * Renders one credential section per provider returned by ``/api/providers``.
+ * The agent section is special (address + api_key); all other providers only
+ * need an API key. Sections are populated server-side from ``PROVIDER_REGISTRY``
+ * so adding a provider to the backend automatically surfaces it here. */
 function ConnectionsTab() {
     const { userId, currentUser } = useApp()
+    const [providers, setProviders] = useState([])
     const [draft, setDraft] = useState(null)
     const [saved, setSaved] = useState(null)
     const [error, setError] = useState('')
@@ -23,12 +19,12 @@ function ConnectionsTab() {
     const [info, setInfo] = useState('')
 
     function refresh() {
-        if (userId == null) return
+        if (userId == null) return Promise.resolve()
         return axios.get(`/api/users/${userId}/settings`)
             .then(response => {
-                const incoming = {
-                    openrouter: { api_key: '', ...response.data.openrouter },
-                    agent:      { api_key: '', ...response.data.agent },
+                const incoming = {}
+                for (const [key, val] of Object.entries(response.data)) {
+                    incoming[key] = { api_key: '', ...val }
                 }
                 setSaved(incoming)
                 setDraft(incoming)
@@ -36,7 +32,21 @@ function ConnectionsTab() {
             .catch(err => setError(err.response?.data?.error || 'Could not load settings.'))
     }
 
-    useEffect(() => { refresh() }, [userId])
+    useEffect(() => {
+        if (userId == null) return
+        Promise.all([
+            axios.get('/api/providers'),
+            axios.get(`/api/users/${userId}/settings`),
+        ]).then(([provRes, settRes]) => {
+            setProviders(provRes.data)
+            const incoming = {}
+            for (const [key, val] of Object.entries(settRes.data)) {
+                incoming[key] = { api_key: '', ...val }
+            }
+            setSaved(incoming)
+            setDraft(incoming)
+        }).catch(err => setError(err.response?.data?.error || 'Could not load settings.'))
+    }, [userId])
 
     function update(section, field, value) {
         setInfo('')
@@ -46,16 +56,21 @@ function ConnectionsTab() {
     function save(e) {
         e.preventDefault()
         if (userId == null) return
-        // Send only what the user actually touched — partial PUT.
         const payload = {}
-        if (draft.openrouter.api_key) {
-            payload.openrouter = { api_key: draft.openrouter.api_key }
+
+        // Registry providers — each only has an api_key; empty keeps the existing value.
+        for (const p of providers) {
+            if (p.id === 'agent') continue
+            const key = draft[p.id]?.api_key
+            if (key) payload[p.id] = { api_key: key }
         }
+
+        // Agent — address and api_key have their own semantics (empty api_key clears it).
         const agentSection = {}
-        if (draft.agent.address !== saved.agent.address) {
+        if (draft.agent?.address !== saved.agent?.address) {
             agentSection.address = draft.agent.address
         }
-        if (draft.agent.api_key !== '') {
+        if (draft.agent?.api_key !== '') {
             agentSection.api_key = draft.agent.api_key
         }
         if (Object.keys(agentSection).length > 0) payload.agent = agentSection
@@ -81,12 +96,12 @@ function ConnectionsTab() {
         return <div className='list-empty'>Loading…</div>
     }
 
-    const openrouterPlaceholder = draft.openrouter.has_api_key
-        ? `Current: ${draft.openrouter.api_key_preview || '…'} (leave blank to keep)`
-        : 'sk-or-…'
-    const agentKeyPlaceholder = draft.agent.has_api_key
+    const agentKeyPlaceholder = draft.agent?.has_api_key
         ? `Current: ${draft.agent.api_key_preview || '…'} (leave blank to clear)`
         : '(optional — only required if the agent has an API_KEY configured)'
+
+    // Registry providers (everything except agent), in registry order.
+    const registryProviders = providers.filter(p => p.id !== 'agent')
 
     return (
         <form onSubmit={save} className='manage-form'>
@@ -106,7 +121,7 @@ function ConnectionsTab() {
                     <label className='field__label'>Address</label>
                     <input
                         className='input'
-                        value={draft.agent.address}
+                        value={draft.agent?.address || ''}
                         onChange={(e) => update('agent', 'address', e.target.value)}
                         placeholder='http://127.0.0.1:8090'
                     />
@@ -120,7 +135,7 @@ function ConnectionsTab() {
                     <input
                         className='input'
                         type='password'
-                        value={draft.agent.api_key}
+                        value={draft.agent?.api_key || ''}
                         onChange={(e) => update('agent', 'api_key', e.target.value)}
                         placeholder={agentKeyPlaceholder}
                     />
@@ -130,23 +145,31 @@ function ConnectionsTab() {
                 </div>
             </section>
 
-            <section style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
-                <span className='section__title' style={{ margin: 0 }}>OpenRouter</span>
+            {registryProviders.map(p => {
+                const section = draft[p.id] || {}
+                const placeholder = section.has_api_key
+                    ? `Current: ${section.api_key_preview || '…'} (leave blank to keep)`
+                    : 'sk-…'
+                return (
+                    <section key={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
+                        <span className='section__title' style={{ margin: 0 }}>{p.label}</span>
 
-                <div className='field'>
-                    <label className='field__label'>API key</label>
-                    <input
-                        className='input'
-                        type='password'
-                        value={draft.openrouter.api_key}
-                        onChange={(e) => update('openrouter', 'api_key', e.target.value)}
-                        placeholder={openrouterPlaceholder}
-                    />
-                    <span className='field__hint'>
-                        Empty input <strong>keeps</strong> the existing key (clearing it bricks every OpenRouter LLM). To remove a key, delete and recreate.
-                    </span>
-                </div>
-            </section>
+                        <div className='field'>
+                            <label className='field__label'>API key</label>
+                            <input
+                                className='input'
+                                type='password'
+                                value={section.api_key || ''}
+                                onChange={(e) => update(p.id, 'api_key', e.target.value)}
+                                placeholder={placeholder}
+                            />
+                            <span className='field__hint'>
+                                Empty input <strong>keeps</strong> the existing key.
+                            </span>
+                        </div>
+                    </section>
+                )
+            })}
 
             <div className='manage-form__actions'>
                 <button type='submit' className='btn btn--primary' disabled={busy}>

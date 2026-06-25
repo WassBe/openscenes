@@ -15,27 +15,55 @@ import requests
 import config
 
 DB = config.DB
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_TIMEOUT = 120
 
 AGENT_COMPLETE_PATH = "/v1/complete"
 # Cold-loading a large GGUF without mmap can take a minute or more on top
 # of generation time, so the cap is set well above the usual 2-minute one.
 AGENT_TIMEOUT = 300
 
-_OPENROUTER_STATUS_HINTS = {
-    400: "OpenRouter rejected the request as malformed — the model name may be wrong, or the prompt may exceed its context window.",
-    401: "OpenRouter rejected the API key. Open the LLM in Manage → LLMs and paste a fresh key from openrouter.ai/keys.",
-    402: "Your OpenRouter account is out of credits. Top it up at openrouter.ai/credits, then retry.",
-    403: "OpenRouter refused this request — the model may not be available on your plan, blocked in your region, or flagged by content moderation.",
-    404: "OpenRouter does not recognise this model identifier. Check the spelling against openrouter.ai/models (e.g. \"anthropic/claude-3.5-sonnet\").",
-    408: "OpenRouter timed out before the model replied. Try again, or pick a faster model.",
+# Registry of OpenAI-compatible cloud providers. Each entry drives dispatch,
+# settings defaults, and the Connections UI automatically — adding a provider
+# here is all that is needed on the backend side.
+PROVIDER_REGISTRY = {
+    'openrouter': {
+        'label':    'OpenRouter',
+        'base_url': 'https://openrouter.ai/api/v1/chat/completions',
+        'timeout':  120,
+        'hint':     'Forward requests to OpenRouter using your API key.',
+    },
+    'together': {
+        'label':    'Together AI',
+        'base_url': 'https://api.together.xyz/v1/chat/completions',
+        'timeout':  120,
+        'hint':     'Forward requests to Together AI using your API key.',
+    },
+    'groq': {
+        'label':    'Groq',
+        'base_url': 'https://api.groq.com/openai/v1/chat/completions',
+        'timeout':  60,
+        'hint':     'Forward requests to Groq Cloud using your API key.',
+    },
+    'mistral': {
+        'label':    'Mistral',
+        'base_url': 'https://api.mistral.ai/v1/chat/completions',
+        'timeout':  120,
+        'hint':     'Forward requests to Mistral AI using your API key.',
+    },
+}
+
+_OPENAI_STATUS_HINTS = {
+    400: "{provider} rejected the request as malformed — the model name may be wrong, or the prompt may exceed its context window.",
+    401: "{provider} rejected the API key — check your key in Settings → Connections.",
+    402: "Your {provider} account is out of credits.",
+    403: "{provider} refused this request — the model may not be available on your plan, blocked in your region, or flagged by content moderation.",
+    404: "{provider} does not recognise this model identifier — check the spelling against the provider's model catalogue.",
+    408: "{provider} timed out before the model replied. Try again, or pick a faster model.",
     413: "The request is too large for this model — shorten the chat history or pick a model with a larger context window.",
-    429: "OpenRouter is rate-limiting this key. Wait a few seconds and retry, or upgrade your plan.",
-    500: "OpenRouter had an internal error. Retry in a moment.",
-    502: "OpenRouter's upstream provider is unreachable. Retry, or pick a different model.",
-    503: "OpenRouter (or the upstream provider) is temporarily unavailable. Retry in a moment.",
-    504: "OpenRouter's upstream provider timed out. Retry, or pick a different model.",
+    429: "{provider} is rate-limiting this key. Wait a few seconds and retry, or upgrade your plan.",
+    500: "{provider} had an internal error. Retry in a moment.",
+    502: "{provider}'s upstream is unreachable. Retry, or pick a different model.",
+    503: "{provider} (or the upstream provider) is temporarily unavailable. Retry in a moment.",
+    504: "{provider}'s upstream timed out. Retry, or pick a different model.",
 }
 
 
@@ -46,11 +74,12 @@ def _scrub_secret(text, secret):
     return text.replace(secret, "***")
 
 
-def _format_openrouter_error(status_code, body_text, api_key):
-    """Build a friendly error string for a non-200 OpenRouter response.
+def _format_openai_error(status_code, body_text, api_key, provider_label):
+    """Build a friendly error string for a non-200 OpenAI-compatible response.
 
-    Extracts the API's ``error.message`` when present, maps the status code
-    to a human hint, and scrubs the API key out of whatever we end up with.
+    Extracts ``error.message`` from the JSON body when present, maps the HTTP
+    status code to a human-readable hint, and scrubs the API key from whatever
+    surfaces to the caller.
     """
     api_message = ''
     try:
@@ -64,33 +93,31 @@ def _format_openrouter_error(status_code, body_text, api_key):
         # Some gateways return plain text rather than JSON on errors.
         api_message = (body_text or '')[:300]
 
-    hint = _OPENROUTER_STATUS_HINTS.get(status_code)
+    hint_tmpl = _OPENAI_STATUS_HINTS.get(status_code)
+    hint = hint_tmpl.format(provider=provider_label) if hint_tmpl else None
     if hint and api_message:
-        message = f"{hint} (OpenRouter: {api_message.strip()})"
+        message = f"{hint} ({provider_label}: {api_message.strip()})"
     elif hint:
         message = hint
     elif api_message:
-        message = f"OpenRouter error ({status_code}): {api_message.strip()}"
+        message = f"{provider_label} error ({status_code}): {api_message.strip()}"
     else:
-        message = f"OpenRouter returned HTTP {status_code} with no detail."
+        message = f"{provider_label} returned HTTP {status_code} with no detail."
 
     return _scrub_secret(message, api_key)
 
 
-def call_openrouter(messages, api_key, model_name, max_tokens=1024, temperature=0.8, top_p=0.95):
-    """Send a chat completion request to OpenRouter and return the reply text.
+def call_openai_compatible(messages, api_key, model_name, base_url, provider_label, timeout=120, max_tokens=1024, temperature=0.8, top_p=0.95):
+    """Send a chat completion to any OpenAI-compatible endpoint and return the reply text.
 
-    The endpoint is OpenAI-compatible, so the ``messages`` payload matches the
-    shape llama-cpp's ``create_chat_completion`` accepts. Errors are re-raised
-    as ``ValueError`` so the Flask layer surfaces them as 400s rather than
-    500s; status codes are mapped to actionable hints (bad key, wrong model,
-    out of credits, rate-limited, …) and the API key is scrubbed from any
-    text that bubbles up.
+    Errors are re-raised as ``ValueError`` so the Flask layer surfaces them as
+    400s. HTTP status codes are mapped to actionable hints and the API key is
+    scrubbed from any text that surfaces to the caller.
     """
     if not api_key:
-        raise ValueError("OpenRouter API key missing for this LLM. Add it in Manage → LLMs.")
+        raise ValueError(f"{provider_label} API key missing. Add it in Settings → Connections.")
     if not model_name:
-        raise ValueError("OpenRouter model name missing for this LLM. Set it in Manage → LLMs.")
+        raise ValueError(f"{provider_label} model name missing for this LLM. Set it in Settings → LLMs.")
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -104,36 +131,37 @@ def call_openrouter(messages, api_key, model_name, max_tokens=1024, temperature=
         "top_p": top_p,
     }
     try:
-        response = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=OPENROUTER_TIMEOUT)
+        response = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
     except requests.Timeout:
-        raise ValueError("OpenRouter did not respond within 2 minutes. The model may be overloaded — retry, or pick a faster one.")
+        raise ValueError(f"{provider_label} did not respond within the timeout. The model may be overloaded — retry, or pick a faster one.")
     except requests.ConnectionError:
-        raise ValueError("Could not reach OpenRouter. Check your internet connection and try again.")
+        raise ValueError(f"Could not reach {provider_label}. Check your internet connection and try again.")
     except requests.RequestException as e:
-        raise ValueError(_scrub_secret(f"OpenRouter request failed: {e}", api_key))
+        raise ValueError(_scrub_secret(f"{provider_label} request failed: {e}", api_key))
 
     if response.status_code != 200:
-        raise ValueError(_format_openrouter_error(response.status_code, response.text, api_key))
+        raise ValueError(_format_openai_error(response.status_code, response.text, api_key, provider_label))
 
     # A 200 response can still hide an ``error`` object when the upstream
-    # provider failed mid-stream — OpenRouter forwards that shape verbatim.
+    # provider failed mid-stream — some gateways forward that shape verbatim.
     try:
         data = response.json()
     except ValueError:
-        raise ValueError("OpenRouter returned a response that was not valid JSON.")
+        raise ValueError(f"{provider_label} returned a response that was not valid JSON.")
 
     if isinstance(data, dict) and data.get('error'):
         err = data['error']
         api_message = err.get('message') if isinstance(err, dict) else str(err)
         code = err.get('code') if isinstance(err, dict) else None
-        hint = _OPENROUTER_STATUS_HINTS.get(code) if isinstance(code, int) else None
-        message = f"{hint} (OpenRouter: {api_message})" if hint and api_message else (api_message or "OpenRouter reported an error with no detail.")
+        hint_tmpl = _OPENAI_STATUS_HINTS.get(code) if isinstance(code, int) else None
+        hint = hint_tmpl.format(provider=provider_label) if hint_tmpl else None
+        message = f"{hint} ({provider_label}: {api_message})" if hint and api_message else (api_message or f"{provider_label} reported an error with no detail.")
         raise ValueError(_scrub_secret(message, api_key))
 
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
-        raise ValueError("OpenRouter returned an unexpected response shape (no choices).")
+        raise ValueError(f"{provider_label} returned an unexpected response shape (no choices).")
 
 
 _AGENT_STATUS_HINTS = {
@@ -453,25 +481,31 @@ Here is the context of the scene:
 def _complete(llm_info, messages, user_settings=None):
     """Dispatch a chat-completion request to the right provider and return text.
 
-    ``user_settings`` carries the BYOK credentials for external providers and
-    the agent endpoint. When present, its values take precedence over the
-    legacy fields stored on the LLM entry; the fallback exists only until the
-    schema migration in task #6 strips those legacy fields entirely.
+    Registry providers (all OpenAI-compatible) are handled generically through
+    ``call_openai_compatible``; the agent uses its own wire format. The
+    ``user_settings`` dict carries BYOK credentials keyed by provider id.
     """
     user_settings = user_settings or {}
     provider = llm_info.get("provider")
-    if provider == "openrouter":
-        openrouter_cfg = user_settings.get("openrouter") or {}
-        api_key = openrouter_cfg.get("api_key") or llm_info.get("api_key")
-        # After the v2 migration the entry's ``name`` is the OpenRouter model
-        # identifier — the legacy ``model`` field is only consulted as a
-        # fallback for entries that pre-date the migration.
-        model_name = llm_info.get("name") or llm_info.get("model")
-        return call_openrouter(
+
+    # ``model`` is the identifier sent to the provider; ``name`` is the free
+    # display label. ``name`` is the fallback for entries that pre-date the
+    # display-name/model split.
+    model_name = llm_info.get("model") or llm_info.get("name")
+
+    if provider in PROVIDER_REGISTRY:
+        cfg = PROVIDER_REGISTRY[provider]
+        provider_cfg = user_settings.get(provider) or {}
+        api_key = provider_cfg.get("api_key") or llm_info.get("api_key")
+        return call_openai_compatible(
             messages=messages,
             api_key=api_key,
             model_name=model_name,
+            base_url=cfg['base_url'],
+            provider_label=cfg['label'],
+            timeout=cfg['timeout'],
         )
+
     if provider == "agent":
         agent_cfg = user_settings.get("agent") or {}
         address = agent_cfg.get("address") or llm_info.get("address")
@@ -482,9 +516,10 @@ def _complete(llm_info, messages, user_settings=None):
             messages=messages,
             address=address,
             api_key=api_key,
-            name=llm_info.get("name"),
+            name=model_name,
         )
-    raise ValueError(f"Unknown LLM provider: {provider}")
+
+    raise ValueError(f"Unknown LLM provider: {provider!r}")
 
 
 def send(message, settings, llm, chats, chatID, new_attempt=False, continue_mode=False, user_settings=None):

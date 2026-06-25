@@ -313,7 +313,7 @@
           <tr>
             <td><span class="method delete">DELETE</span></td>
             <td><code>/api/users/:user_id</code></td>
-            <td>Delete a user (wipes their directory: chats + personas)</td>
+            <td>Delete a user (wipes their directory: chats, personas, settings, LLMs)</td>
             <td>—</td>
             <td><code>{ok: true}</code></td>
           </tr>
@@ -462,9 +462,9 @@
     </div>
   </section>
 
-  <!-- Models -->
+  <!-- Chat styles -->
   <section>
-    <h2 class="section-title">Models</h2>
+    <h2 class="section-title">Chat styles</h2>
     <div class="table-wrap">
       <table>
         <thead>
@@ -473,43 +473,43 @@
         <tbody>
           <tr>
             <td><span class="method get">GET</span></td>
-            <td><code>/api/models</code></td>
-            <td>List all models</td>
+            <td><code>/api/styles</code></td>
+            <td>List all chat styles. A chat style is a pure rules wrapper — the LLM is owned by the chat session, not the style.</td>
             <td>—</td>
-            <td><code>[{id, name, description, llm_id, path}]</code></td>
+            <td><code>[{id, name, description, path}]</code></td>
           </tr>
           <tr>
             <td><span class="method get">GET</span></td>
-            <td><code>/api/models/:model_id</code></td>
-            <td>Get one model with its rules content</td>
+            <td><code>/api/styles/:style_id</code></td>
+            <td>Get one chat style with its rules markdown</td>
             <td>—</td>
-            <td><code>{id, name, description, llm_id, path, rules}</code></td>
+            <td><code>{id, name, description, path, rules}</code></td>
           </tr>
           <tr>
             <td><span class="method post">POST</span></td>
-            <td><code>/api/models</code></td>
-            <td>Create a new model config (the <code>llm_id</code> must refer to an existing LLM entry)</td>
-            <td><code>{name, llm_id, description?, rules?}</code></td>
-            <td><code>{id, name, description, llm_id, path}</code> — 201</td>
+            <td><code>/api/styles</code></td>
+            <td>Create a new chat style</td>
+            <td><code>{name, description?, rules?}</code></td>
+            <td><code>{id, name, description, path}</code> — 201</td>
           </tr>
           <tr>
             <td><span class="method put">PUT</span></td>
-            <td><code>/api/models/:model_id</code></td>
-            <td>Edit a model's settings and rules</td>
-            <td><code>{name?, description?, llm_id?, rules?}</code></td>
-            <td><code>{id, name, description, llm_id, path}</code></td>
+            <td><code>/api/styles/:style_id</code></td>
+            <td>Edit a chat style's fields and/or its rules markdown</td>
+            <td><code>{name?, description?, rules?}</code></td>
+            <td><code>{id, name, description, path}</code></td>
           </tr>
           <tr>
             <td><span class="method post">POST</span></td>
-            <td><code>/api/models/:model_id/duplicate</code></td>
-            <td>Clone a model (metadata + rules) under <code>"&lt;name&gt; (copy)"</code></td>
+            <td><code>/api/styles/:style_id/duplicate</code></td>
+            <td>Clone a chat style (metadata + rules) under <code>"&lt;name&gt; (copy)"</code></td>
             <td>—</td>
-            <td><code>{id, name, description, llm_id, path}</code> — 201</td>
+            <td><code>{id, name, description, path}</code> — 201</td>
           </tr>
           <tr>
             <td><span class="method delete">DELETE</span></td>
-            <td><code>/api/models/:model_id</code></td>
-            <td>Delete a model and its rules file</td>
+            <td><code>/api/styles/:style_id</code></td>
+            <td>Delete a chat style and its rules file</td>
             <td>—</td>
             <td><code>{ok: true}</code></td>
           </tr>
@@ -529,38 +529,73 @@
         <tbody>
           <tr>
             <td><span class="method get">GET</span></td>
-            <td><code>/api/llms</code></td>
-            <td>List every registered LLM. Provider is <code>local</code> (GGUF file) or <code>openrouter</code> (HTTP). API keys are never returned in full — only a <code>…last4</code> preview plus a <code>has_api_key</code> flag.</td>
+            <td><code>/api/users/:user_id/llms</code></td>
+            <td>List a user's registered LLMs. Entries are pure labels — <code>name</code> is a free display label (unique per user), <code>model</code> is the identifier sent to the provider (may repeat across providers). Credentials live in the user's settings, not here.</td>
             <td>—</td>
-            <td><code>[{id, name, provider, filename?, size?, model?, has_api_key?, api_key_preview?}]</code></td>
+            <td><code>[{id, name, model, provider}]</code></td>
           </tr>
           <tr>
             <td><span class="method get">GET</span></td>
-            <td><code>/api/llms/:llm_id</code></td>
-            <td>Get one LLM entry (key still masked)</td>
+            <td><code>/api/users/:user_id/llms/:llm_id</code></td>
+            <td>Get one LLM entry</td>
             <td>—</td>
-            <td>same shape as a list item</td>
+            <td><code>{id, name, model, provider}</code></td>
           </tr>
           <tr>
             <td><span class="method post">POST</span></td>
-            <td><code>/api/llms</code></td>
-            <td>Create an LLM. <strong>Local:</strong> multipart with fields <code>name</code>, <code>provider=local</code>, <code>file</code> (.gguf). <strong>OpenRouter:</strong> JSON.</td>
-            <td>multipart <em>or</em> <code>{name, provider:"openrouter", model, api_key}</code></td>
-            <td>public entry — 201</td>
+            <td><code>/api/users/:user_id/llms</code></td>
+            <td>Register an LLM. <code>provider</code> is a registry id (<code>openrouter</code>, <code>together</code>, <code>groq</code>, <code>mistral</code>) or <code>agent</code>. <code>name</code> must be unique for the user.</td>
+            <td><code>{name, model, provider}</code></td>
+            <td><code>{id, name, model, provider}</code> — 201</td>
           </tr>
           <tr>
             <td><span class="method put">PUT</span></td>
-            <td><code>/api/llms/:llm_id</code></td>
-            <td>Edit name and (for openrouter) model and api_key. An empty/missing <code>api_key</code> keeps the stored one.</td>
-            <td><code>{name?, model?, api_key?}</code></td>
-            <td>public entry</td>
+            <td><code>/api/users/:user_id/llms/:llm_id</code></td>
+            <td>Edit an entry's display <code>name</code> and/or its <code>model</code> identifier. The provider is fixed at creation.</td>
+            <td><code>{name?, model?}</code></td>
+            <td><code>{id, name, model, provider}</code></td>
           </tr>
           <tr>
             <td><span class="method delete">DELETE</span></td>
-            <td><code>/api/llms/:llm_id</code></td>
-            <td>Delete an LLM entry. Local entries also delete the underlying <code>.gguf</code> file. Refuses with 400 when any model preset still references the entry.</td>
+            <td><code>/api/users/:user_id/llms/:llm_id</code></td>
+            <td>Delete an LLM entry. Refuses with 400 when any of the user's chats still references it.</td>
             <td>—</td>
             <td><code>{ok: true}</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Providers & Connections -->
+  <section>
+    <h2 class="section-title">Providers &amp; Connections</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Method</th><th>Path</th><th>Description</th><th>Body</th><th>Response</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="method get">GET</span></td>
+            <td><code>/api/providers</code></td>
+            <td>List the supported providers (the OpenAI-compatible registry plus the agent) for use in the UI.</td>
+            <td>—</td>
+            <td><code>[{id, label, hint}]</code></td>
+          </tr>
+          <tr>
+            <td><span class="method get">GET</span></td>
+            <td><code>/api/users/:user_id/settings</code></td>
+            <td>Get a user's connection settings. API keys are masked — each section returns <code>has_api_key</code> and a <code>…last4</code> preview, never the raw key.</td>
+            <td>—</td>
+            <td><code>{&lt;provider&gt;: {has_api_key, api_key_preview}, …, agent: {address, has_api_key, api_key_preview}}</code></td>
+          </tr>
+          <tr>
+            <td><span class="method put">PUT</span></td>
+            <td><code>/api/users/:user_id/settings</code></td>
+            <td>Update connection settings (partial — only the sections present are touched). For registry providers an empty <code>api_key</code> keeps the stored one; the agent's empty <code>api_key</code> clears it.</td>
+            <td><code>{&lt;provider&gt;: {api_key?}, agent: {address?, api_key?}}</code></td>
+            <td>masked settings (same shape as GET)</td>
           </tr>
         </tbody>
       </table>
@@ -581,14 +616,14 @@
             <td><code>/api/chats/:user_id</code></td>
             <td>List all chats for a user</td>
             <td>—</td>
-            <td><code>[{id, character_id, model_id, last_update, history}]</code></td>
+            <td><code>[{id, character_id, style_id, llm_id, last_update, history}]</code></td>
           </tr>
           <tr>
             <td><span class="method post">POST</span></td>
             <td><code>/api/chats/:user_id/start</code></td>
-            <td>Open a chat for a character. If one already exists, returns it; otherwise creates one seeded with the character's opening message.</td>
-            <td><code>{character_id}</code></td>
-            <td><code>{id, character_id, model_id, last_update, history}</code> — 200 (existing) or 201 (created)</td>
+            <td>Open a chat for a character. If one already exists, returns it; otherwise creates one seeded with the character's opening message (placeholders resolved against <code>persona_id</code> when given).</td>
+            <td><code>{character_id, persona_id?}</code></td>
+            <td><code>{id, character_id, style_id, llm_id, last_update, history}</code> — 200 (existing) or 201 (created)</td>
           </tr>
           <tr>
             <td><span class="method get">GET</span></td>
@@ -613,10 +648,17 @@
           </tr>
           <tr>
             <td><span class="method put">PUT</span></td>
-            <td><code>/api/chats/:user_id/:chat_id/model</code></td>
-            <td>Set the model associated with a chat</td>
-            <td><code>{model_id}</code></td>
-            <td><code>{ok: true, model_id}</code></td>
+            <td><code>/api/chats/:user_id/:chat_id/style</code></td>
+            <td>Set the chat style used by a chat</td>
+            <td><code>{style_id}</code></td>
+            <td><code>{ok: true, style_id}</code></td>
+          </tr>
+          <tr>
+            <td><span class="method put">PUT</span></td>
+            <td><code>/api/chats/:user_id/:chat_id/llm</code></td>
+            <td>Set the LLM used by a chat. <code>llm_id: null</code> clears it; a non-null id must match one of the user's LLMs.</td>
+            <td><code>{llm_id}</code></td>
+            <td><code>{ok: true, llm_id}</code></td>
           </tr>
           <tr>
             <td><span class="method put">PUT</span></td>
@@ -656,8 +698,8 @@
           <tr>
             <td><span class="method post">POST</span></td>
             <td><code>/api/chat/send</code></td>
-            <td>Send a message and get a reply from the LLM</td>
-            <td><code>{user_id, chat_id, character_id, persona_id, model_id, message?, new_attempt?, continue_mode?}</code></td>
+            <td>Send a message and get a reply from the LLM. The chat's LLM is read server-side from <code>chat_id</code> (set it via the chat <code>/llm</code> route first).</td>
+            <td><code>{user_id, chat_id, character_id, persona_id, style_id, message?, new_attempt?, continue_mode?}</code></td>
             <td><code>{reply: string}</code></td>
           </tr>
         </tbody>

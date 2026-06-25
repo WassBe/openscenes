@@ -9,7 +9,9 @@ from flask_cors import CORS
 import json, os, re, shutil, random, string, traceback
 from datetime import datetime, timezone
 import config
-from girlfriend import Style, Llm, Persona, Character, Chats, buildSettings, send, substitute_placeholders
+from girlfriend import Style, Llm, Persona, Character, Chats, buildSettings, send, substitute_placeholders, PROVIDER_REGISTRY
+
+DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'client', 'dist'))
 
 
 def now_iso():
@@ -71,6 +73,7 @@ def ensure_db():
     _migrate_llms_per_user()
     _migrate_models_to_llm_id()
     _migrate_chat_owns_llm()
+    _migrate_llm_display_name()
 
 
 def _migrate_models_to_llm_id():
@@ -264,6 +267,35 @@ def _migrate_chat_owns_llm():
             write_index(path, llms, llms_next)
 
 
+def _migrate_llm_display_name():
+    """Split the LLM ``name`` into a display label plus a ``model`` identifier.
+
+    Entries used to store only ``name``, which doubled as the model identifier
+    sent to the provider. To let the same model be registered under different
+    providers (and named distinctly so the picker stays unambiguous), the
+    resolver id now lives in ``model`` while ``name`` is a free display label.
+    Seeds ``model`` from ``name`` for entries that pre-date the split.
+
+    Idempotent — safe to run on every startup.
+    """
+    users_path = f"{DB}/users/users.json"
+    if not os.path.isfile(users_path):
+        return
+    users, _ = read_index(users_path)
+    for u in users:
+        path = _user_llms_index(u)
+        if not os.path.isfile(path):
+            continue
+        llms, llms_next = read_index(path)
+        changed = False
+        for entry in llms:
+            if 'model' not in entry:
+                entry['model'] = entry.get('name', '')
+                changed = True
+        if changed:
+            write_index(path, llms, llms_next)
+
+
 @app.before_request
 def _check_origin():
     """Reject cross-origin requests whose Origin header is not whitelisted.
@@ -399,7 +431,7 @@ def get_user(user_id):
 # ── Per-user settings ───────────────────────────────────────────────────────
 
 USER_SETTINGS_DEFAULTS = {
-    'openrouter': {'api_key': ''},
+    **{pid: {'api_key': ''} for pid in PROVIDER_REGISTRY},
     'agent': {'address': '', 'api_key': ''},
 }
 
@@ -454,6 +486,21 @@ def _public_user_settings(settings):
     return out
 
 
+@app.route('/api/providers', methods=['GET'])
+def list_providers():
+    """List all supported LLM providers for use in the frontend."""
+    providers = [
+        {'id': pid, 'label': cfg['label'], 'hint': cfg['hint']}
+        for pid, cfg in PROVIDER_REGISTRY.items()
+    ]
+    providers.append({
+        'id':    'agent',
+        'label': 'OpenScenes Agent',
+        'hint':  'Forward requests to a local-or-remote agent running llama-cpp.',
+    })
+    return jsonify(providers)
+
+
 @app.route('/api/users/<int:user_id>/settings', methods=['GET'])
 def get_user_settings(user_id):
     """Return the user's settings (with API keys masked)."""
@@ -486,12 +533,14 @@ def update_user_settings(user_id):
 
         current = _read_user_settings(user)
 
-        openrouter_in = data.get('openrouter')
-        if isinstance(openrouter_in, dict):
-            if 'api_key' in openrouter_in:
-                incoming = (openrouter_in.get('api_key') or '').strip()
+        # Registry providers each only have an api_key; empty input keeps the
+        # existing value (clearing it bricks that provider's LLMs).
+        for provider_id in PROVIDER_REGISTRY:
+            section_in = data.get(provider_id)
+            if isinstance(section_in, dict) and 'api_key' in section_in:
+                incoming = (section_in.get('api_key') or '').strip()
                 if incoming:
-                    current['openrouter']['api_key'] = incoming
+                    current[provider_id]['api_key'] = incoming
 
         agent_in = data.get('agent')
         if isinstance(agent_in, dict):
@@ -1452,7 +1501,7 @@ def _llm_exists(user, llm_id):
 # ── LLM weight files ────────────────────────────────────────────────────────
 
 GLOBAL_LLMS_INDEX = f"{DB}/llms.json"  # Legacy location; only read during migration.
-ALLOWED_PROVIDERS = {'openrouter', 'agent'}
+ALLOWED_PROVIDERS = set(PROVIDER_REGISTRY.keys()) | {'agent'}
 API_KEY_PREVIEW_LEN = 4
 
 
@@ -1472,13 +1521,15 @@ def _mask_api_key(key):
 def _public_llm(entry):
     """Project an LLM index entry into the shape returned by the API.
 
-    Entries are pure labels now — ``{id, name, provider}``. Credentials
-    (OpenRouter API key, Agent address + API key) live in the per-user
-    settings file and are surfaced through ``/api/users/<id>/settings``.
+    Entries are pure labels now — ``{id, name, model, provider}``, where
+    ``name`` is the free display label and ``model`` is the identifier sent
+    to the provider. Credentials live in the per-user settings file and are
+    surfaced through ``/api/users/<id>/settings``.
     """
     return {
         'id': entry['id'],
         'name': entry.get('name', ''),
+        'model': entry.get('model', entry.get('name', '')),
         'provider': entry.get('provider', 'local'),
     }
 
@@ -1526,12 +1577,14 @@ def get_user_llm(user_id, llm_id):
 
 @app.route('/api/users/<int:user_id>/llms', methods=['POST'])
 def create_user_llm(user_id):
-    """Register a new LLM label ``{name, provider}`` for ``user_id``.
+    """Register a new LLM ``{name, model, provider}`` for ``user_id``.
 
-    The connection credentials live in the user's Connections settings.
-    The ``name`` doubles as the resolver identifier: for OpenRouter it is
-    the model id (e.g. ``anthropic/claude-3.5-sonnet``); for the Agent it
-    is the LLM name registered on the agent's own ``llms.json``.
+    ``name`` is a free display label (unique per user, so the picker stays
+    unambiguous); ``model`` is the resolver identifier sent to the provider —
+    for cloud providers the model id (e.g. ``anthropic/claude-3.5-sonnet``),
+    for the Agent the name registered on the agent's own ``llms.json``. The
+    same ``model`` may be registered under several providers. Connection
+    credentials live in the user's Connections settings.
     """
     try:
         user = get_user(user_id)
@@ -1539,10 +1592,13 @@ def create_user_llm(user_id):
         data = request.get_json(silent=True) or {}
         provider = data.get('provider')
         name = (data.get('name') or '').strip()
+        model = (data.get('model') or '').strip()
         if provider not in ALLOWED_PROVIDERS:
             return jsonify({'error': f'Unsupported provider: {provider!r}'}), 400
         if not name:
             return jsonify({'error': 'name required'}), 400
+        if not model:
+            return jsonify({'error': 'model required'}), 400
 
         path = _user_llms_index(user)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1552,7 +1608,7 @@ def create_user_llm(user_id):
         if any(l.get('name', '').lower() == name.lower() for l in llms):
             return jsonify({'error': 'An LLM with this name already exists'}), 400
 
-        entry = {'id': llms_next, 'name': name, 'provider': provider}
+        entry = {'id': llms_next, 'name': name, 'model': model, 'provider': provider}
         llms.append(entry)
         write_index(path, llms, llms_next + 1)
         return jsonify(_public_llm(entry)), 201
@@ -1562,7 +1618,10 @@ def create_user_llm(user_id):
 
 @app.route('/api/users/<int:user_id>/llms/<int:llm_id>', methods=['PUT'])
 def edit_user_llm(user_id, llm_id):
-    """Rename one of ``user_id``'s LLM entries (only the name is editable)."""
+    """Edit an LLM entry's display ``name`` and/or its ``model`` identifier.
+
+    The provider is fixed at creation. ``name`` stays unique per user.
+    """
     try:
         user = get_user(user_id)
         if not user: return jsonify({'error': 'User not found'}), 404
@@ -1581,6 +1640,12 @@ def edit_user_llm(user_id, llm_id):
             if any(l['id'] != llm_id and l.get('name', '').lower() == new_name.lower() for l in llms):
                 return jsonify({'error': 'An LLM with this name already exists'}), 400
             entry['name'] = new_name
+
+        if 'model' in data:
+            new_model = (data.get('model') or '').strip()
+            if not new_model:
+                return jsonify({'error': 'model required'}), 400
+            entry['model'] = new_model
 
         write_index(path, llms, llms_next)
         return jsonify(_public_llm(entry))
@@ -1612,6 +1677,28 @@ def delete_user_llm(user_id, llm_id):
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ── Static client serving ────────────────────────────────────────────────────
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_client(path):
+    """Serve the built React client, falling back to index.html for SPA routing.
+
+    Paths that start with ``api`` are not matched by any registered route and
+    would reach this catch-all — return a JSON 404 so the API contract is
+    preserved. For all other paths, serve the matching static file if it
+    exists in ``client/dist/``, otherwise return ``index.html`` so
+    react-router-dom handles the route client-side.
+    """
+    if path == 'api' or path.startswith('api/'):
+        return jsonify({'error': 'Not found'}), 404
+    if not os.path.isdir(DIST_DIR):
+        return jsonify({'error': 'Client not built — run python setup.py first'}), 503
+    if path and os.path.isfile(os.path.join(DIST_DIR, path)):
+        return send_from_directory(DIST_DIR, path)
+    return send_from_directory(DIST_DIR, 'index.html')
 
 
 ensure_db()

@@ -12,7 +12,7 @@
 ![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux-informational)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Local, self-hosted character roleplay chatbot. Dispatches each chat to your **OpenScenes Agent** (a standalone llama-cpp server, BYOM) or **OpenRouter** (BYOK), chosen per chat.
+Local, self-hosted character roleplay chatbot. Dispatches each chat to a backend **you** choose — your own **OpenScenes Agent** (a standalone llama-cpp server, BYOM) or a cloud provider like **OpenRouter**, **Together AI**, **Groq**, or **Mistral** (BYOK) — chosen per chat. Your providers, your models, your data: no platform lock-in, no ads, no middleman.
 
 </div>
 
@@ -43,10 +43,10 @@ Local, self-hosted character roleplay chatbot. Dispatches each chat to your **Op
 
 OpenScenes lets you create characters with a persona, a scene context, and an opening line, then chat with them through a browser. Conversation history, characters, personas, chat styles, per-user LLM labels, and connection credentials all live as plain JSON / markdown files in `database/` on your disk.
 
-Inference itself lives **out of process**. The main app is provider-agnostic — it speaks HTTP to one of:
+Inference itself lives **out of process**. The main app is provider-agnostic — it speaks HTTP to either:
 
-- **OpenScenes Agent** — a sibling project (`../agent/`) that wraps `llama-cpp-python` and serves local GGUF weights. Runs anywhere, talks back over a tiny HTTP contract.
-- **OpenRouter** — your own API key, forwarded to OpenRouter's OpenAI-compatible endpoint.
+- **OpenScenes Agent** — a sibling project (`../agent/`) that wraps `llama-cpp-python` and serves local GGUF weights. Runs anywhere, talks back over a tiny HTTP contract. Use it for fully-local, offline inference on your own hardware.
+- **A cloud provider** — OpenRouter, Together AI, Groq, or Mistral, each an OpenAI-compatible endpoint reached with your own API key. Providers are defined in a registry, so the list is easy to extend.
 
 You pick per chat. Credentials are per-user (BYOK) and never leave your server except in outbound calls.
 
@@ -60,7 +60,7 @@ You pick per chat. Credentials are per-user (BYOK) and never leave your server e
 
 - Python 3.10+
 - Node.js and npm (any recent LTS)
-- Either an OpenRouter API key, or the OpenScenes Agent installed and running (see [OpenScenes Agent](https://github.com/WassBe/openscenes-agent)).
+- Either a cloud provider API key (OpenRouter, Together AI, Groq, or Mistral), or the OpenScenes Agent installed and running (see [OpenScenes Agent](https://github.com/WassBe/openscenes-agent)).
 
 ### Setup
 
@@ -79,21 +79,23 @@ If you want local inference, also install the agent — its setup is documented 
 python start.py
 ```
 
-Two processes start: the Flask API on `http://localhost:8080` and the built client on `http://localhost:5173`. Open the client URL in your browser. Press `Ctrl+C` to stop both.
+Flask starts on `http://localhost:8080` and serves both the API and the built client from that one address. Open it in your browser. Press `Ctrl+C` to stop. No separate Node process runs at this point — the client was already built during setup.
 
 ### Configuring providers (BYOK)
 
 Before sending your first message, link at least one provider in **Settings → Connections**:
 
 - **OpenScenes Agent** — paste the agent's URL (e.g. `http://127.0.0.1:8090`). If the agent has an `API_KEY` in its `config.ini`, paste that too; leave blank otherwise.
-- **OpenRouter** — paste your OpenRouter API key. Get one at [openrouter.ai/keys](https://openrouter.ai/keys).
+- **A cloud provider** (OpenRouter, Together AI, Groq, Mistral) — paste your API key for that provider. Each section appears automatically for every provider in the registry.
 
 API keys are masked in every response (`…last4` preview plus a `has_api_key` flag) and only travel in the outbound call to the provider.
 
-Then register at least one **LLM label** in **Settings → LLMs**:
+Then register at least one **LLM** in **Settings → LLMs**. Each entry has a **Name** (a free display label, e.g. `Claude 3.5 (OpenRouter)`), a **Model** (the identifier sent to the provider), and a **Provider**:
 
-- **Provider: OpenScenes Agent** — `name` must match an LLM registered with your agent (e.g. `Meta-Llama-3.1-8B-Instruct-Q4_K_M`).
-- **Provider: OpenRouter** — `name` is the OpenRouter model id (e.g. `anthropic/claude-3.5-sonnet`).
+- **Provider: OpenScenes Agent** — the model is the LLM name registered with your agent (e.g. `Meta-Llama-3.1-8B-Instruct-Q4_K_M`).
+- **Provider: a cloud provider** — the model is that provider's model id (e.g. `anthropic/claude-3.5-sonnet` on OpenRouter).
+
+Because the display name is separate from the model id, you can register the **same model under several providers** and tell them apart in the chat picker.
 
 ### Creating a character
 
@@ -151,16 +153,15 @@ Per CONVENTION.md §Sensitive data, no API keys live here — those are stored p
 source/
 ├── config.ini          — addresses, ports, database path
 ├── setup.py            — installer (venv + deps + client build)
-├── start.py            — launcher (backend + client preview)
+├── start.py            — launcher (runs the backend, which also serves the built client)
 ├── api-routes.html     — rendered API reference
 ├── core/               — Flask backend (no local inference)
 ├── client/             — React 19 + Vite frontend
-├── database/           — filesystem-backed storage
-│   ├── styles/         — chat-style presets (index + one .md per style)
-│   ├── characters/     — character data (index + one dir per character)
-│   └── users/          — user data
-│       └── <dir>/      — user.json, chats.json, settings.json, llms.json, personas/
-└── documentation/      — additional docs
+└── database/           — filesystem-backed storage
+    ├── styles/         — chat-style presets (index + one .md per style)
+    ├── characters/     — character data (index + one dir per character)
+    └── users/          — user data
+        └── <dir>/      — user.json, chats.json, settings.json, llms.json, personas/
 ```
 
 ### Backend — `core/`
@@ -176,7 +177,7 @@ Every data collection is stored as an index file shaped `{"next_id": int, "items
 
 ### Frontend — `client/`
 
-React 19 + Vite + react-router-dom 7. Built output goes to `client/dist/` and is served by `npm run preview` when launched through `start.py`.
+React 19 + Vite + react-router-dom 7. Built output goes to `client/dist/` and is served by Flask (the backend) when launched through `start.py` — no separate Node process runs at runtime.
 
 ```
 client/src/
@@ -254,10 +255,16 @@ Body fields: `user_id`, `chat_id`, `character_id`, `persona_id`, `style_id`, `me
 | PUT | `/api/users/<id>` | Rename a user |
 | DELETE | `/api/users/<id>` | Delete a user and all their data |
 | GET / PUT / DELETE | `/api/users/<id>/picture` | Profile picture |
-| GET / PUT | `/api/users/<id>/settings` | Connections (OpenRouter API key, Agent address + optional key). Keys masked in responses. |
-| GET | `/api/users/<id>/llms` | List the user's LLM labels |
-| POST | `/api/users/<id>/llms` | Create (`name`, `provider` ∈ {`agent`, `openrouter`}) |
-| GET / PUT / DELETE | `/api/users/<id>/llms/<llm_id>` | Get / rename / delete one entry |
+| GET / PUT | `/api/users/<id>/settings` | Connections (per-provider API keys, Agent address + optional key). Keys masked in responses. |
+| GET | `/api/users/<id>/llms` | List the user's LLM entries (`{id, name, model, provider}`) |
+| POST | `/api/users/<id>/llms` | Create (`name`, `model`, `provider` ∈ {`agent`, `openrouter`, `together`, `groq`, `mistral`}) |
+| GET / PUT / DELETE | `/api/users/<id>/llms/<llm_id>` | Get / edit (`name?`, `model?`) / delete one entry |
+
+### Providers
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/providers` | List supported providers (registry + agent) for the UI |
 
 ### Personas
 
