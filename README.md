@@ -3,7 +3,9 @@
 <!-- Logo placeholder -->
 <!-- <img src="source/client/src/assets/logo.png" alt="OpenScenes" width="120" /> -->
 
-# OpenScenes
+<p align="center">
+  <img src=".github/thumbnail.png" alt="Logo" width="600">
+</p>
 
 [![GitHub Stars](https://img.shields.io/github/stars/WassBe/openscenes?style=flat)](https://github.com/WassBe/openscenes)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
